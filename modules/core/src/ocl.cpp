@@ -47,6 +47,7 @@
 #include <iostream> // std::cerr
 
 #define CV_OPENCL_ALWAYS_SHOW_BUILD_LOG 0
+#define CV_OPENCL_SHOW_RUN_ERRORS       0
 
 #include "opencv2/core/bufferpool.hpp"
 #ifndef LOG_BUFFER_POOL
@@ -2892,6 +2893,9 @@ bool Kernel::create(const char* kname, const Program& prog)
         p->release();
         p = 0;
     }
+#ifdef CV_OPENCL_RUN_ASSERT // check kernel compilation fails
+    CV_Assert(p);
+#endif
     return p != 0;
 }
 
@@ -3037,6 +3041,13 @@ bool Kernel::run(int dims, size_t _globalsize[], size_t _localsize[],
     cl_int retval = clEnqueueNDRangeKernel(qq, p->handle, (cl_uint)dims,
                                            offset, globalsize, _localsize, 0, 0,
                                            sync ? 0 : &p->e);
+#if CV_OPENCL_SHOW_RUN_ERRORS
+    if (retval != CL_SUCCESS)
+    {
+        printf("OpenCL program returns error: %d\n", retval);
+        fflush(stdout);
+    }
+#endif
     if( sync || retval != CL_SUCCESS )
     {
         CV_OclDbgAssert(clFinish(qq) == CL_SUCCESS);
@@ -3515,6 +3526,10 @@ protected:
         entry.clBuffer_ = clCreateBuffer((cl_context)ctx.ptr(), CL_MEM_READ_WRITE, entry.capacity_, 0, &retval);
         CV_Assert(retval == CL_SUCCESS);
         CV_Assert(entry.clBuffer_ != NULL);
+        if(retval == CL_SUCCESS)
+        {
+            CV_IMPL_ADD(CV_IMPL_OCL);
+        }
         LOG_BUFFER_POOL("OpenCL allocate %lld (0x%llx) bytes: %p\n",
                 (long long)entry.capacity_, (long long)entry.capacity_, entry.clBuffer_);
     }
@@ -3739,6 +3754,7 @@ public:
                                           CL_MEM_READ_WRITE|createFlags, total, 0, &retval);
             if( !handle || retval != CL_SUCCESS )
                 return defaultAllocate(dims, sizes, type, data, step, flags, usageFlags);
+            CV_IMPL_ADD(CV_IMPL_OCL)
         }
         UMatData* u = new UMatData(this);
         u->data = 0;
@@ -4179,19 +4195,23 @@ public:
         CV_Assert(dst->refcount == 0);
         cl_command_queue q = (cl_command_queue)Queue::getDefault().ptr();
 
+        cl_int retval;
         if( iscontinuous )
         {
-            CV_Assert( clEnqueueCopyBuffer(q, (cl_mem)src->handle, (cl_mem)dst->handle,
-                                           srcrawofs, dstrawofs, total, 0, 0, 0) == CL_SUCCESS );
+            CV_Assert( (retval = clEnqueueCopyBuffer(q, (cl_mem)src->handle, (cl_mem)dst->handle,
+                                           srcrawofs, dstrawofs, total, 0, 0, 0)) == CL_SUCCESS );
         }
         else
         {
-            cl_int retval;
             CV_Assert( (retval = clEnqueueCopyBufferRect(q, (cl_mem)src->handle, (cl_mem)dst->handle,
                                                new_srcofs, new_dstofs, new_sz,
                                                new_srcstep[0], new_srcstep[1],
                                                new_dststep[0], new_dststep[1],
                                                0, 0, 0)) == CL_SUCCESS );
+        }
+        if(retval == CL_SUCCESS)
+        {
+            CV_IMPL_ADD(CV_IMPL_OCL)
         }
 
         dst->markHostCopyObsolete(true);
@@ -4504,8 +4524,8 @@ int predictOptimalVectorWidth(InputArray src1, InputArray src2, InputArray src3,
     if (vectorWidths[0] == 1)
     {
         // it's heuristic
-        vectorWidths[CV_8U] = vectorWidths[CV_8S] = 16;
-        vectorWidths[CV_16U] = vectorWidths[CV_16S] = 8;
+        vectorWidths[CV_8U] = vectorWidths[CV_8S] = 4;
+        vectorWidths[CV_16U] = vectorWidths[CV_16S] = 2;
         vectorWidths[CV_32S] = vectorWidths[CV_32F] = vectorWidths[CV_64F] = 1;
     }
 
